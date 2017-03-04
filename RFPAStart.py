@@ -1,10 +1,10 @@
-import sys, time
+import sys, time, csv
 from optparse import OptionParser
 from pyModbusTCP.client import ModbusClient
 
-def connectClient(ip):
+def connectClient(ip, verbose):
     try:
-        c = ModbusClient(host=ip, port=502, debug=True)
+        c = ModbusClient(host=ip, port=502, debug=verbose)
     except ValueError:
         print("Error with host or port params")
 
@@ -16,63 +16,106 @@ def connectClient(ip):
 
     return c
 
+def monitor (c):
+    print "Monitoring"
+    table = []
+    table.append([])
+    table[0].append("--")
+    table[0].append("DC")
+    table[0].append("RF")
+    table[0].append("PS")
+    table[0].append("AIR TEM")
+    table[0].append("FAN ROT")  
+    count = 0
+    print '\t'.join(str(x) for x in table[count])
+    while count < 5:
+        regs = readHoldingRegisters(c,1, 3)
+        regs = regs + (readHoldingRegisters(c,22, 2))
+        regs.insert(0,count) 
+        table.append(regs)
+        time.sleep(2)
+        count = count + 1
+        print '\t'.join(str(x) for x in table[count])
+
+    with open("monitor.csv", "wb") as f:
+        writer = csv.writer(f)
+        writer.writerows(table)
+
 def readHoldingRegisters(c,address,registers):
-    regs = c.read_holding_registers(address, registers)
-    print("Register address #"+str(address)+":"+str(regs))
-    return regs
+    while True:
+        if c.is_open():
+            regs = c.read_holding_registers(address, registers)
+            if regs:
+                return regs
+        else:
+            c.open()
 
 def writeSingleRegister(c,address,value):
     w = c.write_single_register(address,value)
-    print("Writing address #"+str(address)+" with value "+str(value)+": "+str(w))
+    #print("Writing address #"+str(address)+" with value "+str(value)+": "+str(w))
 
-def writeMultipleRegisters(c,address,value):
+def writeMultipleRegisters(c,address,value): 
     w = c.write_multiple_registers(address,value)
-    print("Writing address #"+str(address)+" with value "+str(value)+": "+str(w))
+    #print("Writing address #"+str(address)+" with value "+str(value)+": "+str(w))
 
 def closeClient(c):
     close = c.close()
-    print ("Conecction is close? "+str(close))
+    print ("\nConecction is close? "+str(close))
 
 def main():
     usage = "usage: %prog --address <IP> [options]"
     parser = OptionParser(usage=usage)
     parser.add_option("-a","--address", dest="address", default=None, help="Provide IP address of the SSA")
+    parser.add_option("-v","--verbose", action="store_true", dest="verbose", default=False, help="Verbose output")
+    parser.add_option("-m","--monitor", action="store_true", dest="monitor", default=False, help="Monitoring mode of registers")
     (options, args) = parser.parse_args()
 
     if options.address is None:
         parser.error("Please provide IP address of the SSA")
         sys.exit(1)
 
-    c = connectClient(options.address)
+    #Connect to the SSA
+    c = connectClient(options.address, options.verbose)
 
-    faults = [1,1]
+    #Clear internal & esternal faults
+    faults = []
     while faults != [0,0]:
+        print "\nClearing internal and external faults..."
         writeSingleRegister(c,4,2) #Clear external faults
         writeSingleRegister(c,4,1) #Clear internal faults
+        time.sleep(2)
         faults = readHoldingRegisters(c,13,2) #Read internal & external fault error codes
-        time.sleep(1)
-    print ("Faults cleared!")
+        if faults == [0,0]: break
+        print "Internal and/or external faults error codes " + str(faults)
+        raw_input ("Check the errors and press enter to try to clear faults again...")
+    print ("\nFaults cleared!\n")
 
+    #Enable DC
     DC = 0
-    while DC == 0:
+    while DC != [1]:
         writeSingleRegister(c,1,1) #Enable DC
-        DC = readHoldingRegisters(c,1,1) #Read DC
-        time.sleep(1)
-    print ("DC enabled!")
+        time.sleep(2)
+        DC = readHoldingRegisters(c,1,1) #Read DC 
+    print ("\nDC enabled!\n")
 
-    RF = 0
-    while RF == 0:
+    #Enable RF
+    RF = 0 
+    while RF != [1]:
         writeSingleRegister(c,2,1) #Enable RF
-        DC = readHoldingRegisters(c,2,1) #Read RF
-        time.sleep(1)
-    print ("RF enabled!")
+        time.sleep(2)
+        RF = readHoldingRegisters(c,2,1) #Read RF
+    print ("\nRF enabled!\n")
 
+    #Set DCPS to 13.5V
     DCPS = 0
-    while CDPS != 700:
+    while DCPS != [700]:
         writeSingleRegister(c,3,700) #Set DCPS to 13.5V
-        DC = readHoldingRegisters(c,3,1) #Read DCPS value
-        time.sleep(1)
-    print ("DCPS set to 700!")
+        time.sleep(2)
+        DCPS = readHoldingRegisters(c,3,1) #Read DCPS value
+    print ("\nDCPS set to 700!\n")
+
+    #Monitoring mode
+    if options.monitor == True : monitor(c)
 
     closeClient(c)
 
